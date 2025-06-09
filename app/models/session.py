@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, Float, Boolean
 from sqlalchemy.sql import func
-from app.database.config import Base
+from app.database import Base
 
 class LearningSession(Base):
     """Model for tracking learning sessions"""

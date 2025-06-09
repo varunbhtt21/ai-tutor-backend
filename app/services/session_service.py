@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
 from app.models.session import LearningSession, ConversationLog
-from app.database.config import get_db
+from app.database import get_db
 
 logger = logging.getLogger(__name__)
 

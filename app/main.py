@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from app.database.config import get_db
+from app.database import get_db
 from app.websocket.lesson_handler import lesson_websocket_endpoint
 
 # Configure logging

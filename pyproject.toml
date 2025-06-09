@@ -38,3 +38,8 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"] 
+
+[dependency-groups]
+dev = [
+    "websockets>=15.0.1",
+]

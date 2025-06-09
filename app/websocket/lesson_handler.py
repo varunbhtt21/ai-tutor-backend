@@ -1,12 +1,9 @@
-from fastapi import WebSocket, WebSocketDisconnect, Depends
-from sqlalchemy.orm import Session
+from fastapi import WebSocket, WebSocketDisconnect
 import json
 import uuid
 import logging
 import time
 from typing import Any, Dict
-
-from app.database.config import get_db
 from app.websocket.connection_manager import ConnectionManager
 from app.services.audio_service import AudioService
 from app.services.session_service import SessionService
@@ -22,8 +19,7 @@ conversation_service = ConversationService()
 
 async def lesson_websocket_endpoint(
     websocket: WebSocket, 
-    session_id: str,
-    db: Session = Depends(get_db)
+    session_id: str
 ):
     """Main WebSocket endpoint for lesson interactions"""
     client_id = str(uuid.uuid4())
