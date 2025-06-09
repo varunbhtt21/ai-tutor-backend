@@ -24,8 +24,8 @@ class TTSService:
             logger.warning("OpenAI API key not set - TTS functionality will be disabled")
         
         self.default_voice = "alloy"
-        self.default_model = "tts-1"
-        self.default_format = "mp3"
+        self.default_model = "tts-1"  # Use tts-1 for smaller files vs tts-1-hd
+        self.default_format = "mp3"   # MP3 is compressed
         
         # Available voices from OpenAI TTS
         self.available_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
