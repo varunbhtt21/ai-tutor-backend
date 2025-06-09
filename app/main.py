@@ -11,6 +11,7 @@ load_dotenv()
 
 from app.database import get_db
 from app.websocket.lesson_handler import lesson_websocket_endpoint
+from app.api.analytics import router as analytics_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include API routers
+app.include_router(analytics_router)
 
 @app.get("/")
 async def root():

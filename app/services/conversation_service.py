@@ -67,6 +67,28 @@ class ConversationService:
             user_id = "test_user"  # TODO: Get from session/auth
             learning_context = await self._get_learning_context(session_id, user_id, message)
             
+            # Get real-time analytics insights for conversation adaptation
+            try:
+                from app.services.learning_analytics_service import LearningAnalyticsService
+                analytics_service = LearningAnalyticsService()
+                
+                real_time_insights = await analytics_service.generate_real_time_insights(
+                    session_id, 
+                    user_id,
+                    {
+                        "current_concept": learning_context.get("current_concept", {}).get("slug") if learning_context.get("current_concept") else None,
+                        "user_response": message
+                    }
+                )
+                
+                # Incorporate insights into learning context
+                learning_context["analytics_insights"] = real_time_insights
+                analytics_service.close()
+                
+            except Exception as e:
+                logger.warning(f"Failed to get real-time analytics: {e}")
+                learning_context["analytics_insights"] = None
+            
             # Process through dialogue engine with learning context
             result = await self.dialogue_engine.process_input(
                 session_id=session_id,
