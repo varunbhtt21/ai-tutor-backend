@@ -11,6 +11,13 @@ class LearningSession(Base):
     user_id = Column(String(255), index=True, nullable=False)
     lesson_id = Column(String(255), index=True, nullable=False)
     status = Column(String(50), default="active")  # active, completed, paused
+    
+    # Audio/TTS preferences
+    audio_enabled = Column(Boolean, default=True)
+    preferred_voice = Column(String(50), default="alloy")  # TTS voice preference
+    speech_rate = Column(Float, default=1.0)  # Speech speed (0.25 - 4.0)
+    audio_format = Column(String(10), default="mp3")  # Audio format preference
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

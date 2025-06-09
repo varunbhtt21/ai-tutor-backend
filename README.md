@@ -1,6 +1,8 @@
 # AI Tutor Backend
 
-Real-time teaching pipeline with WebSocket support for interactive learning.
+Real-time teaching pipeline: **browser mic → WebSocket → Whisper STT → Dialogue/State Manager → LLM responses → Voice TTS**
+
+Complete AI tutor with curriculum-driven conversation and voice interaction capabilities.
 
 ## Setup & Installation
 
@@ -19,19 +21,26 @@ uv pip install -e .
 # Copy environment template
 cp env.example .env
 
-# Edit .env with your database credentials
-# DATABASE_URL=postgresql://username:password@localhost:5432/ai_tutor_db
+# Edit .env with your configuration:
+# - OpenAI API key for GPT-4o and TTS (required)
+# - Database URL (optional, defaults to SQLite)
+```
+
+**Required Environment Variables:**
+```bash
+OPENAI_API_KEY=your_openai_api_key_here  # Required for AI features
+DATABASE_URL=sqlite:///./ai_tutor.db     # Default SQLite database
 ```
 
 ### 3. Database Setup
 
 #### Initial Migration Setup
 ```bash
-# Create initial migration
-./migrations.sh init
-
 # Apply migrations to database
 ./migrations.sh upgrade
+
+# Initialize curriculum data
+uv run python initialize_curriculum.py
 ```
 
 #### Migration Workflow
@@ -70,18 +79,37 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ### API Endpoints
 - `GET /` - Root endpoint
 - `GET /health` - Health check with database status
-- `WS /ws/lesson/{session_id}` - WebSocket for lessons (coming in Phase 1)
+- `WS /ws/lesson/{session_id}` - **Main WebSocket endpoint for AI tutoring**
+
+## Features
+
+### ✅ **Phase 0-3: Complete Core System**
+- **Audio Input**: WebSocket + Whisper STT for speech recognition
+- **Intelligent Conversation**: GPT-4o powered educational dialogue
+- **Curriculum Engine**: Learning graph with personalized paths
+- **Progress Tracking**: Mastery scoring and concept prerequisites
+- **Real-time WebSocket**: Bidirectional communication
+
+### ✅ **Phase 4: Voice Output & TTS** (Current)
+- **Text-to-Speech**: OpenAI TTS API integration
+- **Voice Selection**: 6 different voices (alloy, echo, fable, onyx, nova, shimmer)
+- **Audio Response**: Complete audio conversation loop
+- **Voice Settings**: Customizable speed and format
+- **Base64 Streaming**: Efficient audio delivery via WebSocket
 
 ## Database Models
 
-### LearningSession
-Tracks user learning sessions and their status.
+### Core Models
+- **LearningSession**: User sessions with audio preferences
+- **ConversationLog**: Interaction history with audio metrics
+- **LearningMetrics**: Performance and engagement tracking
 
-### ConversationLog  
-Logs all conversation interactions with metrics.
-
-### LearningMetrics
-Stores learning progress and performance metrics.
+### Curriculum Models  
+- **LearningConcept**: Core curriculum concepts with content
+- **ConceptPrerequisite**: Learning dependencies and sequences
+- **StudentProgress**: Individual mastery and confidence tracking
+- **LearningPath**: Personalized learning journeys
+- **AssessmentResult**: Knowledge check results and recommendations
 
 ## Development Workflow
 
@@ -90,22 +118,45 @@ Stores learning progress and performance metrics.
 3. **Apply migration**: `./migrations.sh upgrade`
 4. **Test changes** with `/health` endpoint
 
+## Testing
+
+### Phase 4 TTS Testing
+```bash
+# Test TTS functionality (requires OpenAI API key)
+export OPENAI_API_KEY=your_key_here
+uv run python test_phase4_tts.py
+```
+
+### WebSocket Testing  
+```bash
+# Use the frontend test suite
+cd ../ai-frontend
+uv run python test_conversation.py
+```
+
 ## Architecture
 
 ```
 app/
-├── main.py              # FastAPI application
-├── database/
-│   ├── config.py        # SQLAlchemy setup
-│   └── __init__.py
-├── models/
-│   ├── session.py       # Database models
-│   └── __init__.py
-├── websocket/           # WebSocket handlers (Phase 1)
-└── conversation/        # Dialogue manager (Phase 2)
+├── main.py              # FastAPI application  
+├── database.py          # SQLAlchemy setup
+├── models/              # Database models
+│   ├── session.py       #   Core session models
+│   └── learning_graph.py#   Curriculum models
+├── services/            # Business logic
+│   ├── audio_service.py #   Whisper STT processing
+│   ├── tts_service.py   #   OpenAI TTS integration  
+│   ├── conversation_service.py  # GPT-4o dialogue
+│   └── learning_graph_service.py # Curriculum engine
+├── websocket/           # WebSocket handlers
+├── conversation/        # Dialogue state management
+└── __init__.py
 
-alembic/                 # Migration files
-├── versions/            # Generated migrations
-├── env.py              # Alembic configuration
-└── script.py.mako      # Migration template
+lesson_graphs/           # Curriculum data
+├── python_curriculum.py# Structured learning content  
+└── __init__.py
+
+alembic/                 # Database migrations
+├── versions/            # Generated migration files
+└── env.py              # Migration configuration
 ```
