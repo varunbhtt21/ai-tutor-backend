@@ -109,6 +109,10 @@ class SessionCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=1000)
     course_id: int
     
+    # Session scheduling
+    start_time: datetime
+    end_time: datetime
+    
     # Bubble graph
     graph_json: BubbleGraphSchema
     
@@ -116,6 +120,13 @@ class SessionCreate(BaseModel):
     max_attempts_per_bubble: int = Field(3, ge=1, le=10)
     coins_per_bubble: int = Field(10, ge=0)
     time_limit_minutes: Optional[int] = Field(None, gt=0)
+    
+    @validator('end_time')
+    def validate_end_time(cls, v, values):
+        """Validate end_time is after start_time"""
+        if 'start_time' in values and v <= values['start_time']:
+            raise ValueError("end_time must be after start_time")
+        return v
 
 
 class SessionUpdate(BaseModel):
@@ -123,6 +134,8 @@ class SessionUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=1000)
     status: Optional[SessionStatus] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
     graph_json: Optional[BubbleGraphSchema] = None
     max_attempts_per_bubble: Optional[int] = Field(None, ge=1, le=10)
     coins_per_bubble: Optional[int] = Field(None, ge=0)
@@ -136,6 +149,8 @@ class SessionResponse(BaseModel):
     description: Optional[str] = None
     course_id: int
     status: SessionStatus
+    start_time: datetime
+    end_time: datetime
     graph_json: Dict[str, Any]  # Raw JSON for client
     max_attempts_per_bubble: int
     coins_per_bubble: int
@@ -148,6 +163,9 @@ class SessionResponse(BaseModel):
     total_bubbles: int = 0
     student_count: int = 0
     avg_completion_time: Optional[float] = None
+    is_active: bool = False
+    is_upcoming: bool = False
+    is_past: bool = False
 
     class Config:
         from_attributes = True

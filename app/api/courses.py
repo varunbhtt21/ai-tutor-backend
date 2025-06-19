@@ -10,7 +10,9 @@ from sqlmodel import Session, select
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.course import Course
+from app.models.enrollment import CourseEnrollment
 from app.schemas.course import CourseCreate, CourseResponse, CourseUpdate, CourseListResponse
+from app.schemas.enrollment import EnrollmentCreate, BulkEnrollmentResponse, EnrollmentResponse, EnrollmentListResponse
 from app.api.auth import get_current_user
 
 router = APIRouter(prefix="/courses", tags=["courses"])
@@ -229,26 +231,165 @@ async def delete_course(
     return {"message": "Course deleted successfully"}
 
 
-@router.post("/{course_id}/enroll")
-async def enroll_in_course(
+@router.post("/{course_id}/enroll", response_model=BulkEnrollmentResponse)
+async def enroll_students_in_course(
     course_id: int,
+    enrollment_data: EnrollmentCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_instructor_or_admin)
 ):
-    """Enroll student in course (placeholder)"""
-    if current_user.role != UserRole.STUDENT:
+    """Enroll multiple students in a course by email (instructor/admin only)"""
+    # Verify course exists and user has access
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check instructor permissions
+    if current_user.role == UserRole.INSTRUCTOR and course.instructor_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only students can enroll in courses"
+            detail="Only course instructors can enroll students"
         )
     
-    course = db.get(Course, course_id)
-    if not course or not course.is_public or not course.is_active:
-        raise HTTPException(status_code=404, detail="Course not available")
+    successful_enrollments = []
+    failed_enrollments = []
     
-    # For now, just return success
-    # In a full implementation, you'd create enrollment records
-    return {"message": "Enrolled successfully", "course_id": course_id}
+    for email in enrollment_data.student_emails:
+        try:
+            # Find student by email
+            student_stmt = select(User).where(User.email == email, User.role == UserRole.STUDENT)
+            student = db.exec(student_stmt).first()
+            
+            if not student:
+                failed_enrollments.append({
+                    "email": email,
+                    "error": "Student not found or user is not a student"
+                })
+                continue
+            
+            # Check if already enrolled
+            existing_stmt = select(CourseEnrollment).where(
+                CourseEnrollment.student_id == student.id,
+                CourseEnrollment.course_id == course_id
+            )
+            existing_enrollment = db.exec(existing_stmt).first()
+            
+            if existing_enrollment:
+                failed_enrollments.append({
+                    "email": email,
+                    "error": "Student already enrolled in this course"
+                })
+                continue
+            
+            # Create enrollment
+            enrollment = CourseEnrollment(
+                student_id=student.id,
+                course_id=course_id,
+                status="active",
+                enrolled_at=datetime.utcnow()
+            )
+            
+            db.add(enrollment)
+            db.commit()
+            db.refresh(enrollment)
+            
+            # Create response with student info
+            enrollment_response = EnrollmentResponse(
+                id=enrollment.id,
+                student_id=enrollment.student_id,
+                course_id=enrollment.course_id,
+                status=enrollment.status,
+                enrolled_at=enrollment.enrolled_at,
+                completed_at=enrollment.completed_at,
+                progress_percentage=enrollment.progress_percentage,
+                last_accessed_at=enrollment.last_accessed_at,
+                student_name=student.full_name,
+                student_email=student.email,
+                course_name=course.name
+            )
+            
+            successful_enrollments.append(enrollment_response)
+            
+        except Exception as e:
+            failed_enrollments.append({
+                "email": email,
+                "error": f"Enrollment failed: {str(e)}"
+            })
+    
+    return BulkEnrollmentResponse(
+        successful_enrollments=successful_enrollments,
+        failed_enrollments=failed_enrollments,
+        total_processed=len(enrollment_data.student_emails),
+        successful_count=len(successful_enrollments),
+        failed_count=len(failed_enrollments)
+    )
+
+
+@router.get("/{course_id}/enrollments", response_model=EnrollmentListResponse)
+async def get_course_enrollments(
+    course_id: int,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_instructor_or_admin)
+):
+    """Get all enrollments for a course"""
+    # Verify course exists and user has access
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check instructor permissions
+    if current_user.role == UserRole.INSTRUCTOR and course.instructor_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only course instructors can view enrollments"
+        )
+    
+    # Build query
+    stmt = select(CourseEnrollment).where(CourseEnrollment.course_id == course_id)
+    
+    if status:
+        stmt = stmt.where(CourseEnrollment.status == status)
+    
+    # Count total
+    total_stmt = stmt
+    total = len(db.exec(total_stmt).all())
+    
+    # Apply pagination
+    offset = (page - 1) * per_page
+    stmt = stmt.offset(offset).limit(per_page)
+    
+    enrollments = db.exec(stmt).all()
+    
+    # Build response with student info
+    enrollment_responses = []
+    for enrollment in enrollments:
+        # Get student info
+        student = db.get(User, enrollment.student_id)
+        
+        enrollment_response = EnrollmentResponse(
+            id=enrollment.id,
+            student_id=enrollment.student_id,
+            course_id=enrollment.course_id,
+            status=enrollment.status,
+            enrolled_at=enrollment.enrolled_at,
+            completed_at=enrollment.completed_at,
+            progress_percentage=enrollment.progress_percentage,
+            last_accessed_at=enrollment.last_accessed_at,
+            student_name=student.full_name if student else "Unknown",
+            student_email=student.email if student else "Unknown",
+            course_name=course.name
+        )
+        enrollment_responses.append(enrollment_response)
+    
+    return EnrollmentListResponse(
+        enrollments=enrollment_responses,
+        total=total,
+        page=page,
+        per_page=per_page
+    )
 
 
 @router.get("/{course_id}/sessions")

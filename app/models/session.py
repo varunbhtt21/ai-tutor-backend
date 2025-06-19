@@ -36,6 +36,10 @@ class Session(SQLModel, table=True):
     course_id: int = Field(foreign_key="course.id")
     status: SessionStatus = Field(default=SessionStatus.DRAFT)
     
+    # Session scheduling
+    start_time: datetime = Field(description="When the session starts")
+    end_time: datetime = Field(description="When the session ends")
+    
     # Bubble graph structure stored as JSON
     graph_json: Dict[str, Any] = Field(sa_column=Column(JSON))
     
@@ -78,6 +82,24 @@ class Session(SQLModel, table=True):
     def is_published(self) -> bool:
         """Check if session is published"""
         return self.status == SessionStatus.PUBLISHED
+    
+    @property
+    def is_active(self) -> bool:
+        """Check if session is currently active"""
+        now = datetime.utcnow()
+        return self.is_published and self.start_time <= now <= self.end_time
+    
+    @property
+    def is_upcoming(self) -> bool:
+        """Check if session is upcoming"""
+        now = datetime.utcnow()
+        return self.is_published and now < self.start_time
+    
+    @property
+    def is_past(self) -> bool:
+        """Check if session is past"""
+        now = datetime.utcnow()
+        return now > self.end_time
     
     def get_start_node_id(self) -> Optional[str]:
         """Get the starting node ID from graph"""

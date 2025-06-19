@@ -46,7 +46,7 @@ def get_session() -> Generator[Session, None, None]:
 # Alias for FastAPI dependency injection
 def get_db() -> Generator[Session, None, None]:
     """Get database session for FastAPI dependency injection"""
-    return get_session()
+    yield from get_session()
 
 
 # Test database connection

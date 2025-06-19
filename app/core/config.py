@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     openai_max_tokens: int = 1000
     
     # CORS
-    cors_origins: List[str] = ["http://localhost:8501", "http://localhost:3000"]
+    cors_origins: List[str] = ["http://localhost:8501", "http://localhost:3000", "http://localhost:8080", "http://localhost:5173"]
     
     # Code Sandbox
     code_sandbox_url: str = "http://localhost:8080"

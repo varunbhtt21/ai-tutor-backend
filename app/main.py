@@ -94,7 +94,7 @@ async def health_check():
 
 
 # Include API routers
-from app.api import auth_router, courses_router, sessions_router, analytics_router, ai_tutor_router, progress_tracking_router
+from app.api import auth_router, courses_router, sessions_router, analytics_router, ai_tutor_router, progress_tracking_router, users_router
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(courses_router, prefix="/api/v1")  
@@ -102,6 +102,7 @@ app.include_router(sessions_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(ai_tutor_router, prefix="/api/v1")
 app.include_router(progress_tracking_router, prefix="/api/v1")
+app.include_router(users_router, prefix="/api/v1")
 
 
 if __name__ == "__main__":

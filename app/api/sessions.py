@@ -80,6 +80,8 @@ async def create_session(
         description=session_data.description,
         course_id=session_data.course_id,
         status="draft",
+        start_time=session_data.start_time,
+        end_time=session_data.end_time,
         graph_json=session_data.graph_json.dict(),
         max_attempts_per_bubble=session_data.max_attempts_per_bubble,
         coins_per_bubble=session_data.coins_per_bubble,
@@ -117,6 +119,7 @@ async def create_session(
 async def list_sessions(
     course_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
+    active_only: bool = Query(False, description="Filter for currently active sessions"),
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -132,6 +135,17 @@ async def list_sessions(
     
     if status:
         stmt = stmt.where(SessionModel.status == status)
+    
+    # Filter for active sessions
+    if active_only:
+        now = datetime.utcnow()
+        stmt = stmt.where(
+            and_(
+                SessionModel.status == "published",
+                SessionModel.start_time <= now,
+                SessionModel.end_time >= now
+            )
+        )
     
     # For students, only show published sessions
     if current_user.role == UserRole.STUDENT:
@@ -162,6 +176,11 @@ async def list_sessions(
         student_count_stmt = select(StudentState).where(StudentState.session_id == session.id)
         student_count = len(db.exec(student_count_stmt).all())
         response.student_count = student_count
+        
+        # Set computed status fields
+        response.is_active = session.is_active
+        response.is_upcoming = session.is_upcoming
+        response.is_past = session.is_past
         
         session_responses.append(response)
     
@@ -199,6 +218,11 @@ async def get_session(
     student_count_stmt = select(StudentState).where(StudentState.session_id == session_id)
     student_count = len(db.exec(student_count_stmt).all())
     response.student_count = student_count
+    
+    # Set computed status fields
+    response.is_active = session.is_active
+    response.is_upcoming = session.is_upcoming
+    response.is_past = session.is_past
     
     return response
 

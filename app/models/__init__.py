@@ -7,6 +7,7 @@ from .user import User, UserRole
 from .course import Course
 from .session import Session, BubbleNode, StudentState
 from .analytics import EventLog, CoinTransaction
+from .enrollment import CourseEnrollment
 
 __all__ = [
     "User",
@@ -17,4 +18,5 @@ __all__ = [
     "StudentState",
     "EventLog",
     "CoinTransaction",
+    "CourseEnrollment",
 ] 
