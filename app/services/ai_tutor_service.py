@@ -12,7 +12,8 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from app.models.session import BubbleNode, StudentState
-from app.models.analytics import EventLog, EventType
+from app.models.analytics import EventLog, EventType, MessageType
+from app.services.student_tracking_service import StudentTrackingService
 from app.schemas.ai_tutor import (
     TutorRequest, TutorResponse, HintRequest, HintResponse,
     CodeFeedbackRequest, CodeFeedbackResponse, LearningPathSuggestion
@@ -25,7 +26,8 @@ class AITutorService:
     """AI-powered tutoring service using OpenAI"""
     
     def __init__(self):
-        """Initialize OpenAI client"""
+        """Initialize OpenAI client and tracking service"""
+        # Initialize OpenAI client
         try:
             if hasattr(settings, 'openai_api_key') and settings.openai_api_key and settings.openai_api_key != "your-openai-api-key-here":
                 self.client = OpenAI(api_key=settings.openai_api_key)
@@ -37,6 +39,9 @@ class AITutorService:
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI client: {e}")
             self.client = None
+        
+        # Initialize tracking service
+        self.tracking_service = StudentTrackingService()
     
     def is_available(self) -> bool:
         """Check if AI service is available"""
@@ -48,14 +53,44 @@ class AITutorService:
         student_context: Dict[str, Any],
         db: Session
     ) -> TutorResponse:
-        """Get personalized AI response based on student context"""
+        """Get personalized AI response based on student context with comprehensive tracking"""
+        
+        start_time = datetime.utcnow()
+        student_id = student_context.get("student_id")
+        session_id = student_context.get("session_id")
+        
+        # Initialize or get session tracking
+        session_tracking = None
+        if student_id and session_id:
+            session_tracking = await self.tracking_service.initialize_session_tracking(
+                session_id=session_id,
+                student_id=student_id,
+                db=db
+            )
         
         if not self.is_available():
-            return self._get_fallback_response(request)
+            response = self._get_fallback_response(request)
+            if session_tracking:
+                await self._track_interaction_response(
+                    session_tracking, student_id, session_id, request, response, start_time, db
+                )
+            return response
         
         try:
-            # Build context for AI
-            context = self._build_student_context(request, student_context, db)
+            # Track student question first
+            if session_tracking:
+                await self.tracking_service.track_chat_interaction(
+                    session_tracking_id=session_tracking.id,
+                    student_id=student_id,
+                    session_id=session_id,
+                    message_type=MessageType.STUDENT_QUESTION,
+                    content=request.question,
+                    node_id=request.bubble_id,
+                    db=db
+                )
+            
+            # Build context for AI (enhanced with tracking data)
+            context = self._build_enhanced_student_context(request, student_context, session_tracking, db)
             
             # Create system prompt
             system_prompt = self._create_system_prompt(request.bubble_type, context)
@@ -69,14 +104,35 @@ class AITutorService:
             # Parse and structure response
             tutor_response = self._parse_ai_response(response, request)
             
-            # Log interaction
-            self._log_tutor_interaction(request, tutor_response, student_context, db)
+            # Enhanced interaction logging
+            await self._log_enhanced_tutor_interaction(
+                request, tutor_response, student_context, session_tracking, start_time, db
+            )
+            
+            # Real-time struggle detection
+            if session_tracking:
+                struggle_analysis = await self.tracking_service.detect_real_time_struggle(
+                    session_tracking_id=session_tracking.id,
+                    student_id=student_id,
+                    session_id=session_id,
+                    node_id=request.bubble_id,
+                    db=db
+                )
+                
+                if struggle_analysis and struggle_analysis.intervention_suggested:
+                    logger.warning(f"Intervention suggested for student {student_id} - struggle score: {struggle_analysis.struggle_score}")
+                    # Here you could trigger instructor notifications via WebSocket
             
             return tutor_response
             
         except Exception as e:
             logger.error(f"Error in AI tutor response: {e}")
-            return self._get_fallback_response(request)
+            response = self._get_fallback_response(request)
+            if session_tracking:
+                await self._track_interaction_response(
+                    session_tracking, student_id, session_id, request, response, start_time, db
+                )
+            return response
     
     async def get_contextual_hint(
         self,
@@ -354,6 +410,115 @@ class AITutorService:
         else:
             return "independent"
     
+    def _build_enhanced_student_context(
+        self,
+        request: TutorRequest,
+        student_context: Dict[str, Any],
+        session_tracking: Optional[Any],
+        db: Session
+    ) -> Dict[str, Any]:
+        """Build enhanced student context including tracking data"""
+        
+        # Start with original context
+        context = self._build_student_context(request, student_context, db)
+        
+        # Add enhanced tracking data if available
+        if session_tracking:
+            context.update({
+                "session_progress": session_tracking.progress_percentage,
+                "current_struggle_score": session_tracking.current_struggle_score,
+                "recent_engagement": {
+                    "chat_messages": session_tracking.total_chat_messages,
+                    "code_changes": session_tracking.total_code_changes,
+                    "help_requests": session_tracking.help_requests,
+                    "consecutive_failures": session_tracking.consecutive_failures
+                },
+                "session_duration_minutes": (
+                    datetime.utcnow() - session_tracking.start_time
+                ).total_seconds() / 60
+            })
+        
+        return context
+    
+    async def _log_enhanced_tutor_interaction(
+        self,
+        request: TutorRequest,
+        response: TutorResponse,
+        student_context: Dict[str, Any],
+        session_tracking: Optional[Any],
+        start_time: datetime,
+        db: Session
+    ):
+        """Enhanced logging of AI tutor interaction"""
+        
+        try:
+            # Calculate response time
+            response_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            
+            # Traditional EventLog for backward compatibility
+            event = EventLog(
+                event_type=EventType.TUTOR_INTERACTION,
+                student_id=student_context.get("student_id", 1),
+                session_id=student_context.get("session_id"),
+                node_id=request.bubble_id,
+                payload={
+                    "question": request.question[:100],  # Limit length
+                    "response_length": len(response.response),
+                    "confidence": response.confidence,
+                    "suggestions_count": len(response.suggestions),
+                    "response_time_ms": response_time_ms
+                },
+                response_time_ms=response_time_ms,
+                timestamp=datetime.utcnow()
+            )
+            
+            db.add(event)
+            
+            # Enhanced tracking if session tracking is available
+            if session_tracking:
+                await self.tracking_service.track_chat_interaction(
+                    session_tracking_id=session_tracking.id,
+                    student_id=student_context.get("student_id"),
+                    session_id=student_context.get("session_id"),
+                    message_type=MessageType.AI_RESPONSE,
+                    content=response.response,
+                    node_id=request.bubble_id,
+                    response_time_ms=response_time_ms,
+                    db=db
+                )
+            
+            db.commit()
+        except Exception as e:
+            logger.error(f"Error logging enhanced tutor interaction: {e}")
+    
+    async def _track_interaction_response(
+        self,
+        session_tracking: Any,
+        student_id: int,
+        session_id: int,
+        request: TutorRequest,
+        response: TutorResponse,
+        start_time: datetime,
+        db: Session
+    ):
+        """Track interaction response for fallback scenarios"""
+        
+        try:
+            response_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            
+            await self.tracking_service.track_chat_interaction(
+                session_tracking_id=session_tracking.id,
+                student_id=student_id,
+                session_id=session_id,
+                message_type=MessageType.AI_RESPONSE,
+                content=response.response,
+                node_id=request.bubble_id,
+                response_time_ms=response_time_ms,
+                db=db
+            )
+        except Exception as e:
+            logger.error(f"Error tracking interaction response: {e}")
+    
     def _log_tutor_interaction(
         self,
         request: TutorRequest,
@@ -361,7 +526,7 @@ class AITutorService:
         student_context: Dict[str, Any],
         db: Session
     ):
-        """Log AI tutor interaction for analytics"""
+        """Log AI tutor interaction for analytics (legacy method)"""
         
         try:
             event = EventLog(

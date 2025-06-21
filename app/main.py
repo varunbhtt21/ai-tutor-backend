@@ -51,6 +51,18 @@ async def startup_event():
         create_db_and_tables()
         logger.info("Database tables created/verified")
     
+    # Setup WebSocket manager integration
+    from app.api.websocket import manager
+    from app.services.student_tracking_service import StudentTrackingService
+    
+    # Create a global tracking service instance and inject WebSocket manager
+    tracking_service = StudentTrackingService()
+    tracking_service.set_websocket_manager(manager)
+    
+    # Store in app state for dependency injection
+    app.state.tracking_service = tracking_service
+    app.state.websocket_manager = manager
+    
     logger.info("Application startup complete")
 
 
@@ -94,7 +106,8 @@ async def health_check():
 
 
 # Include API routers
-from app.api import auth_router, courses_router, sessions_router, analytics_router, ai_tutor_router, progress_tracking_router, users_router
+from app.api import auth_router, courses_router, sessions_router, analytics_router, ai_tutor_router, progress_tracking_router, users_router, student_tracking_router, ai_analytics_router
+from app.api.websocket import router as websocket_router
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(courses_router, prefix="/api/v1")  
@@ -103,6 +116,9 @@ app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(ai_tutor_router, prefix="/api/v1")
 app.include_router(progress_tracking_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
+app.include_router(student_tracking_router, prefix="/api/v1/analytics", tags=["Student Tracking"])
+app.include_router(ai_analytics_router, prefix="/api/v1", tags=["AI Analytics"])
+app.include_router(websocket_router, tags=["WebSocket"])
 
 
 if __name__ == "__main__":

@@ -402,6 +402,57 @@ async def get_student_state(
     return state
 
 
+@router.get("/{session_id}/student-state", response_model=StudentStateResponse)
+async def get_student_state_alt(
+    session_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get student state for session (alternative endpoint)"""
+    return await get_student_state(session_id, db, current_user)
+
+
+@router.put("/{session_id}/current-node")
+async def update_current_node(
+    session_id: int,
+    request: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Update student's current node"""
+    if current_user.role != UserRole.STUDENT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only students can update current node"
+        )
+    
+    node_id = request.get('node_id')
+    if not node_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="node_id is required"
+        )
+    
+    stmt = select(StudentState).where(
+        StudentState.student_id == current_user.id,
+        StudentState.session_id == session_id
+    )
+    student_state = db.exec(stmt).first()
+    
+    if not student_state:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student state not found"
+        )
+    
+    student_state.current_node_id = node_id
+    student_state.last_activity_at = datetime.utcnow()
+    db.add(student_state)
+    db.commit()
+    
+    return {"success": True, "current_node_id": node_id}
+
+
 # Bubble node management
 @router.post("/{session_id}/bubbles", response_model=BubbleNodeResponse)
 async def create_bubble_node(
@@ -491,4 +542,224 @@ async def get_bubble_node(
     elif current_user.role == UserRole.INSTRUCTOR:
         require_instructor_access(session_id, current_user, db)
     
-    return BubbleNodeResponse.from_orm(bubble) 
+    return BubbleNodeResponse.from_orm(bubble)
+
+
+@router.get("/{session_id}/bubble/{node_id}/context")
+async def get_bubble_context(
+    session_id: int,
+    node_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get bubble context for AI tutor"""
+    # Get session
+    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Get bubble node from graph
+    bubble_node = None
+    for node in session.graph_json.get("nodes", []):
+        if node.get("id") == node_id:
+            bubble_node = node
+            break
+    
+    if not bubble_node:
+        raise HTTPException(status_code=404, detail="Bubble node not found")
+    
+    # Get or create student state
+    student_state = db.query(StudentState).filter(
+        StudentState.student_id == current_user.id,
+        StudentState.session_id == session_id
+    ).first()
+    
+    if not student_state:
+        raise HTTPException(status_code=404, detail="Student not enrolled in session")
+    
+    # Build bubble context
+    bubble_context = {
+        "node_id": node_id,
+        "type": bubble_node.get("type", "concept"),
+        "title": bubble_node.get("title", node_id),
+        "content": bubble_node.get("content", ""),
+        "estimated_minutes": bubble_node.get("estimated_minutes", 5),
+        "instructions": bubble_node.get("instructions", ""),
+        "tutor_prompt": bubble_node.get("tutor_prompt", ""),
+        "hints": bubble_node.get("hints", []),
+        "coin_reward": bubble_node.get("coin_reward", 10),
+        "prerequisites": get_node_prerequisites(session.graph_json, node_id),
+        "is_unlocked": is_node_unlocked(session.graph_json, node_id, student_state.completed_nodes),
+        "is_completed": node_id in student_state.completed_nodes,
+        "failed_attempts": student_state.failed_attempts.get(node_id, 0) if student_state.failed_attempts else 0,
+        "student_progress": {
+            "total_coins": student_state.total_coins,
+            "completion_percentage": student_state.completion_percentage,
+            "time_spent": student_state.total_time_spent
+        }
+    }
+    
+    return bubble_context
+
+
+@router.post("/{session_id}/bubble/{node_id}/ai-request")
+async def ai_tutor_request(
+    session_id: int,
+    node_id: str,
+    request: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Handle AI tutor request with bubble context"""
+    from app.services.ai_tutor_service import AITutorService
+    from app.schemas.ai_tutor import TutorRequest
+    
+    # Get bubble context
+    bubble_context = await get_bubble_context(session_id, node_id, current_user, db)
+    
+    # Create enhanced tutor request
+    tutor_request = TutorRequest(
+        question=request.get("question", ""),
+        bubble_type=bubble_context["type"],
+        bubble_id=node_id,
+        context={
+            "session_id": session_id,
+            "student_id": current_user.id,
+            "bubble_context": bubble_context
+        }
+    )
+    
+    # Get AI response
+    ai_service = AITutorService()
+    student_context = {
+        "student_id": current_user.id,
+        "session_id": session_id,
+        "bubble_context": bubble_context
+    }
+    
+    response = await ai_service.get_personalized_response(tutor_request, student_context, db)
+    
+    return response
+
+
+@router.post("/{session_id}/bubble/{node_id}/validate")
+async def validate_bubble_completion(
+    session_id: int,
+    node_id: str,
+    submission: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Validate bubble completion and provide feedback"""
+    # Get session and bubble context
+    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    bubble_node = None
+    for node in session.graph_json.get("nodes", []):
+        if node.get("id") == node_id:
+            bubble_node = node
+            break
+    
+    if not bubble_node:
+        raise HTTPException(status_code=404, detail="Bubble node not found")
+    
+    # Get student state
+    student_state = db.query(StudentState).filter(
+        StudentState.student_id == current_user.id,
+        StudentState.session_id == session_id
+    ).first()
+    
+    if not student_state:
+        raise HTTPException(status_code=404, detail="Student not enrolled in session")
+    
+    # Validate based on bubble type
+    bubble_type = bubble_node.get("type", "concept")
+    validation_result = validate_submission_by_type(bubble_type, submission, bubble_node)
+    
+    # If validation fails, increment failed attempts
+    if not validation_result["is_valid"]:
+        if not student_state.failed_attempts:
+            student_state.failed_attempts = {}
+        student_state.failed_attempts[node_id] = student_state.failed_attempts.get(node_id, 0) + 1
+        db.commit()
+    
+    return {
+        "is_valid": validation_result["is_valid"],
+        "feedback": validation_result["feedback"],
+        "suggestions": validation_result.get("suggestions", []),
+        "failed_attempts": student_state.failed_attempts.get(node_id, 0)
+    }
+
+
+def get_node_prerequisites(graph_json: dict, node_id: str) -> list:
+    """Get prerequisite nodes for a given node"""
+    prerequisites = []
+    for edge in graph_json.get("edges", []):
+        if edge.get("to") == node_id:
+            prerequisites.append(edge.get("from"))
+    return prerequisites
+
+
+def is_node_unlocked(graph_json: dict, node_id: str, completed_nodes: list) -> bool:
+    """Check if a node is unlocked based on prerequisites"""
+    prerequisites = get_node_prerequisites(graph_json, node_id)
+    return all(prereq in completed_nodes for prereq in prerequisites)
+
+
+def validate_submission_by_type(bubble_type: str, submission: dict, bubble_node: dict) -> dict:
+    """Validate submission based on bubble type"""
+    if bubble_type in ["concept", "demo", "summary"]:
+        # These are completed by acknowledgment
+        return {
+            "is_valid": True,
+            "feedback": "Great! You've completed this learning module."
+        }
+    
+    elif bubble_type == "task":
+        # Validate code submission
+        code = submission.get("code", "").strip()
+        if not code:
+            return {
+                "is_valid": False,
+                "feedback": "Please submit your code solution.",
+                "suggestions": ["Write code in the editor", "Make sure your code is not empty"]
+            }
+        
+        # Basic code validation (in production, this would run tests)
+        expected_keywords = bubble_node.get("expected_keywords", [])
+        if expected_keywords:
+            missing_keywords = [kw for kw in expected_keywords if kw not in code]
+            if missing_keywords:
+                return {
+                    "is_valid": False,
+                    "feedback": f"Your code is missing some required elements: {', '.join(missing_keywords)}",
+                    "suggestions": [f"Include {kw} in your solution" for kw in missing_keywords]
+                }
+        
+        return {
+            "is_valid": True,
+            "feedback": "Excellent! Your code solution looks correct."
+        }
+    
+    elif bubble_type == "quiz":
+        # Validate quiz answers
+        answers = submission.get("answers", {})
+        if not answers:
+            return {
+                "is_valid": False,
+                "feedback": "Please answer all quiz questions.",
+                "suggestions": ["Complete all questions before submitting"]
+            }
+        
+        # For demo purposes, consider quiz valid if answers are provided
+        return {
+            "is_valid": True,
+            "feedback": "Well done! You've completed the quiz successfully."
+        }
+    
+    return {
+        "is_valid": True,
+        "feedback": "Completed successfully!"
+    } 

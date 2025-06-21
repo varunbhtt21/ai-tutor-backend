@@ -3,7 +3,8 @@ Security utilities for authentication and authorization
 """
 
 from datetime import datetime, timedelta
-from typing import Optional, Union
+from typing import Optional, Union, List
+from functools import wraps
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
@@ -154,4 +155,36 @@ async def get_current_user_optional(
         
     except Exception as e:
         logger.error(f"Error getting optional user: {e}")
-        return None 
+        return None
+
+
+def require_role(allowed_roles: List[str]):
+    """
+    Decorator to require specific roles for accessing endpoints
+    
+    Args:
+        allowed_roles: List of roles that are allowed to access the endpoint
+    
+    Returns:
+        Decorated function that checks user role before allowing access
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Extract current_user from kwargs
+            current_user = kwargs.get('current_user')
+            if not current_user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required"
+                )
+            
+            if current_user.role not in allowed_roles:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Access denied. Required roles: {allowed_roles}"
+                )
+            
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator 

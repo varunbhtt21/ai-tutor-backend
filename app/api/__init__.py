@@ -9,5 +9,7 @@ from .analytics import router as analytics_router
 from .ai_tutor import router as ai_tutor_router
 from .progress_tracking import router as progress_tracking_router
 from .users import router as users_router
+from .student_tracking import router as student_tracking_router
+from .ai_analytics import router as ai_analytics_router
 
-__all__ = ["auth_router", "courses_router", "sessions_router", "analytics_router", "ai_tutor_router", "progress_tracking_router", "users_router"] 
+__all__ = ["auth_router", "courses_router", "sessions_router", "analytics_router", "ai_tutor_router", "progress_tracking_router", "users_router", "student_tracking_router", "ai_analytics_router"] 
