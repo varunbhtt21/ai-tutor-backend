@@ -172,10 +172,14 @@ async def list_sessions(
         response = SessionResponse.from_orm(session)
         response.total_bubbles = len(session.graph_json.get('nodes', []))
         
-        # Get student count
-        student_count_stmt = select(StudentState).where(StudentState.session_id == session.id)
-        student_count = len(db.exec(student_count_stmt).all())
-        response.student_count = student_count
+        # Get student count from course enrollments
+        from app.models.enrollment import CourseEnrollment
+        enrollment_stmt = select(CourseEnrollment).where(
+            CourseEnrollment.course_id == session.course_id,
+            CourseEnrollment.status == "active"
+        )
+        enrolled_students = db.exec(enrollment_stmt).all()
+        response.student_count = len(enrolled_students)
         
         # Set computed status fields
         response.is_active = session.is_active
@@ -214,10 +218,14 @@ async def get_session(
     response = SessionResponse.from_orm(session)
     response.total_bubbles = len(session.graph_json.get('nodes', []))
     
-    # Get student count
-    student_count_stmt = select(StudentState).where(StudentState.session_id == session_id)
-    student_count = len(db.exec(student_count_stmt).all())
-    response.student_count = student_count
+    # Get student count from course enrollments
+    from app.models.enrollment import CourseEnrollment
+    enrollment_stmt = select(CourseEnrollment).where(
+        CourseEnrollment.course_id == session.course_id,
+        CourseEnrollment.status == "active"
+    )
+    enrolled_students = db.exec(enrollment_stmt).all()
+    response.student_count = len(enrolled_students)
     
     # Set computed status fields
     response.is_active = session.is_active

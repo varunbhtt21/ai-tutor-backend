@@ -130,11 +130,13 @@ async def list_courses(
         sessions = db.exec(session_stmt).all()
         response.total_sessions = len(sessions)
         
-        # Count unique students across all sessions
-        from app.models.session import StudentState
-        student_stmt = select(StudentState).join(SessionModel).where(SessionModel.course_id == course.id)
-        unique_students = set(state.student_id for state in db.exec(student_stmt).all())
-        response.student_count = len(unique_students)
+        # Count enrolled students for this course
+        enrollment_stmt = select(CourseEnrollment).where(
+            CourseEnrollment.course_id == course.id,
+            CourseEnrollment.status == "active"
+        )
+        enrolled_students = db.exec(enrollment_stmt).all()
+        response.student_count = len(enrolled_students)
         
         course_responses.append(response)
     
@@ -173,10 +175,13 @@ async def get_course(
     sessions = db.exec(session_stmt).all()
     response.total_sessions = len(sessions)
     
-    # Count unique students
-    student_stmt = select(StudentState).join(SessionModel).where(SessionModel.course_id == course_id)
-    unique_students = set(state.student_id for state in db.exec(student_stmt).all())
-    response.student_count = len(unique_students)
+    # Count enrolled students for this course
+    enrollment_stmt = select(CourseEnrollment).where(
+        CourseEnrollment.course_id == course_id,
+        CourseEnrollment.status == "active"
+    )
+    enrolled_students = db.exec(enrollment_stmt).all()
+    response.student_count = len(enrolled_students)
     
     return response
 
