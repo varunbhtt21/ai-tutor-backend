@@ -25,8 +25,8 @@ class BubbleNodeSchema(BaseModel):
 
 class GraphEdgeSchema(BaseModel):
     """Schema for graph edge"""
-    from_node: str = Field(..., alias="from")
-    to_node: str = Field(..., alias="to")
+    from_node: str
+    to_node: str
     
     # Optional edge properties
     label: Optional[str] = None

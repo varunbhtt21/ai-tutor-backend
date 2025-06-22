@@ -290,20 +290,16 @@ async def delete_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_instructor_or_admin)
 ):
-    """Delete session"""
+    """Delete session and all associated data"""
     session = require_instructor_access(session_id, current_user, db)
     
-    # Check if session has student progress
+    # Delete student states first (cascade delete)
     student_stmt = select(StudentState).where(StudentState.session_id == session_id)
     students = db.exec(student_stmt).all()
+    for student_state in students:
+        db.delete(student_state)
     
-    if students:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete session with student progress"
-        )
-    
-    # Delete bubble nodes first
+    # Delete bubble nodes
     bubble_stmt = select(BubbleNode).where(BubbleNode.session_id == session_id)
     bubbles = db.exec(bubble_stmt).all()
     for bubble in bubbles:
@@ -561,41 +557,52 @@ async def get_bubble_context(
     db: Session = Depends(get_db)
 ):
     """Get bubble context for AI tutor"""
+    from app.models.session import BubbleNode
+    
     # Get session
-    session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    session = db.get(SessionModel, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Get bubble node from graph
-    bubble_node = None
+    # Get bubble node from database (not just graph JSON)
+    bubble_stmt = select(BubbleNode).where(
+        BubbleNode.session_id == session_id,
+        BubbleNode.node_id == node_id
+    )
+    bubble_node_db = db.exec(bubble_stmt).first()
+    
+    # Also get basic info from graph JSON
+    bubble_node_graph = None
     for node in session.graph_json.get("nodes", []):
         if node.get("id") == node_id:
-            bubble_node = node
+            bubble_node_graph = node
             break
     
-    if not bubble_node:
+    if not bubble_node_db and not bubble_node_graph:
         raise HTTPException(status_code=404, detail="Bubble node not found")
     
     # Get or create student state
-    student_state = db.query(StudentState).filter(
+    student_stmt = select(StudentState).where(
         StudentState.student_id == current_user.id,
         StudentState.session_id == session_id
-    ).first()
+    )
+    student_state = db.exec(student_stmt).first()
     
     if not student_state:
         raise HTTPException(status_code=404, detail="Student not enrolled in session")
     
-    # Build bubble context
+    # Build bubble context using database content when available
     bubble_context = {
         "node_id": node_id,
-        "type": bubble_node.get("type", "concept"),
-        "title": bubble_node.get("title", node_id),
-        "content": bubble_node.get("content", ""),
-        "estimated_minutes": bubble_node.get("estimated_minutes", 5),
-        "instructions": bubble_node.get("instructions", ""),
-        "tutor_prompt": bubble_node.get("tutor_prompt", ""),
-        "hints": bubble_node.get("hints", []),
-        "coin_reward": bubble_node.get("coin_reward", 10),
+        "type": str(bubble_node_db.type) if bubble_node_db else bubble_node_graph.get("type", "concept"),
+        "title": bubble_node_db.title if bubble_node_db else bubble_node_graph.get("title", node_id),
+        "content": bubble_node_db.content_md if bubble_node_db else bubble_node_graph.get("content", ""),
+        "estimated_minutes": bubble_node_graph.get("estimated_minutes", 5),  # Only from graph JSON
+        "tutor_prompt": bubble_node_db.tutor_prompt if bubble_node_db else bubble_node_graph.get("tutor_prompt", ""),
+        "hints": bubble_node_db.hints if bubble_node_db else bubble_node_graph.get("hints", []),
+        "coin_reward": bubble_node_db.coin_reward if bubble_node_db else bubble_node_graph.get("coin_reward", 10),
+        "code_template": bubble_node_db.code_template if bubble_node_db else bubble_node_graph.get("code_template", ""),
+        "expected_output": bubble_node_db.expected_output if bubble_node_db else bubble_node_graph.get("expected_output", ""),
         "prerequisites": get_node_prerequisites(session.graph_json, node_id),
         "is_unlocked": is_node_unlocked(session.graph_json, node_id, student_state.completed_nodes),
         "is_completed": node_id in student_state.completed_nodes,

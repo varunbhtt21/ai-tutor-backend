@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.models.session import BubbleNode, StudentState
 from app.models.analytics import EventLog, EventType, MessageType
 from app.services.student_tracking_service import StudentTrackingService
+from app.utils.ai_utils import ask_gpt, is_ai_available
 from app.schemas.ai_tutor import (
     TutorRequest, TutorResponse, HintRequest, HintResponse,
     CodeFeedbackRequest, CodeFeedbackResponse, LearningPathSuggestion
@@ -21,31 +22,22 @@ from app.schemas.ai_tutor import (
 
 logger = logging.getLogger(__name__)
 
+# AI utilities are now imported from app.utils.ai_utils
+
 
 class AITutorService:
     """AI-powered tutoring service using OpenAI"""
     
     def __init__(self):
-        """Initialize OpenAI client and tracking service"""
-        # Initialize OpenAI client
-        try:
-            if hasattr(settings, 'openai_api_key') and settings.openai_api_key and settings.openai_api_key != "your-openai-api-key-here":
-                self.client = OpenAI(api_key=settings.openai_api_key)
-                self.model = "gpt-4o-mini"  # Use more cost-effective model
-                logger.info("AI Tutor Service initialized successfully")
-            else:
-                self.client = None
-                logger.warning("OpenAI API key not configured - AI features will be disabled")
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI client: {e}")
-            self.client = None
+        """Initialize AI tutor service"""
+        self.model = "gpt-4o-mini"
         
         # Initialize tracking service
         self.tracking_service = StudentTrackingService()
     
     def is_available(self) -> bool:
         """Check if AI service is available"""
-        return self.client is not None
+        return is_ai_available()
     
     async def get_personalized_response(
         self,
@@ -77,6 +69,8 @@ class AITutorService:
             return response
         
         try:
+            logger.info(f"AI tutor request for bubble {request.bubble_id}, question: {request.question[:50]}...")
+            
             # Track student question first
             if session_tracking:
                 await self.tracking_service.track_chat_interaction(
@@ -91,18 +85,24 @@ class AITutorService:
             
             # Build context for AI (enhanced with tracking data)
             context = self._build_enhanced_student_context(request, student_context, session_tracking, db)
+            logger.info(f"Built context with bubble_context: {bool(context.get('bubble_context'))}")
             
             # Create system prompt
             system_prompt = self._create_system_prompt(request.bubble_type, context)
+            logger.info(f"System prompt length: {len(system_prompt)}")
             
             # Create user message
             user_message = self._create_user_message(request, context)
+            logger.info(f"User message: {user_message}")
             
             # Call OpenAI
+            logger.info("Calling OpenAI API...")
             response = await self._call_openai(system_prompt, user_message)
+            logger.info(f"OpenAI response length: {len(response)}")
             
             # Parse and structure response
             tutor_response = self._parse_ai_response(response, request)
+            logger.info(f"Parsed response: {tutor_response.response[:100]}...")
             
             # Enhanced interaction logging
             await self._log_enhanced_tutor_interaction(
@@ -126,7 +126,7 @@ class AITutorService:
             return tutor_response
             
         except Exception as e:
-            logger.error(f"Error in AI tutor response: {e}")
+            logger.error(f"Error in AI tutor response: {e}", exc_info=True)
             response = self._get_fallback_response(request)
             if session_tracking:
                 await self._track_interaction_response(
@@ -252,10 +252,14 @@ class AITutorService:
         common_mistakes = self._identify_common_mistakes(recent_events)
         learning_style = self._infer_learning_style(recent_events)
         
+        # Include bubble context for AI tutor
+        bubble_context = student_context.get("bubble_context", {})
+        
         return {
             "student_level": student_context.get("level", "beginner"),
             "current_bubble": request.bubble_id,
             "bubble_type": request.bubble_type,
+            "bubble_context": bubble_context,  # Include bubble context
             "recent_performance": success_rate,
             "common_mistakes": common_mistakes,
             "learning_style": learning_style,
@@ -270,19 +274,38 @@ class AITutorService:
         base_prompt = """You are an expert AI tutor specializing in personalized education. 
         Your role is to provide supportive, encouraging, and pedagogically sound guidance."""
         
-        if bubble_type == "concept":
-            specific_prompt = """Focus on clear explanations, use analogies, and build understanding gradually.
-            Ask guiding questions to ensure comprehension."""
-        elif bubble_type == "task":
-            specific_prompt = """Provide step-by-step guidance without giving away answers.
-            Encourage problem-solving thinking and celebrate progress."""
-        elif bubble_type == "quiz":
-            specific_prompt = """Give constructive feedback on answers.
-            Explain why answers are correct or incorrect with clear reasoning."""
-        else:
-            specific_prompt = "Adapt your teaching style to the specific learning objective."
+        # Check if we have bubble-specific content and tutor prompt
+        bubble_context = context.get('bubble_context', {})
+        bubble_content = bubble_context.get('content', '')
+        bubble_tutor_prompt = bubble_context.get('tutor_prompt', '')
+        bubble_title = bubble_context.get('title', '')
         
-        context_prompt = f"""
+        # Use bubble-specific tutor prompt if available, otherwise use generic
+        if bubble_tutor_prompt:
+            specific_prompt = bubble_tutor_prompt
+        else:
+            if bubble_type == "concept":
+                specific_prompt = """Focus on clear explanations, use analogies, and build understanding gradually.
+                Ask guiding questions to ensure comprehension."""
+            elif bubble_type == "task":
+                specific_prompt = """Provide step-by-step guidance without giving away answers.
+                Encourage problem-solving thinking and celebrate progress."""
+            elif bubble_type == "quiz":
+                specific_prompt = """Give constructive feedback on answers.
+                Explain why answers are correct or incorrect with clear reasoning."""
+            else:
+                specific_prompt = "Adapt your teaching style to the specific learning objective."
+        
+        # Add bubble content context if available
+        content_context = ""
+        if bubble_content:
+            content_context = f"""
+        Current Learning Material:
+        Topic: {bubble_title}
+        Content: {bubble_content[:500]}{'...' if len(bubble_content) > 500 else ''}
+        """
+        
+        student_context_prompt = f"""
         Student Context:
         - Level: {context.get('student_level', 'unknown')}
         - Recent Performance: {context.get('recent_performance', 0):.1%}
@@ -290,7 +313,7 @@ class AITutorService:
         - Session Progress: {context.get('session_progress', 0):.1%}
         """
         
-        return f"{base_prompt}\n\n{specific_prompt}\n\n{context_prompt}"
+        return f"{base_prompt}\n\n{specific_prompt}\n\n{content_context}\n\n{student_context_prompt}"
     
     def _create_user_message(self, request: TutorRequest, context: Dict[str, Any]) -> str:
         """Create user message for AI"""
@@ -308,19 +331,10 @@ class AITutorService:
         return message
     
     async def _call_openai(self, system_prompt: str, user_message: str) -> str:
-        """Make API call to OpenAI"""
+        """Make API call to OpenAI using the ask_gpt utility"""
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ],
-                max_tokens=500,
-                temperature=0.7
-            )
-            return response.choices[0].message.content
+            return ask_gpt(user_message, system_prompt)
             
         except Exception as e:
             logger.error(f"OpenAI API call failed: {e}")

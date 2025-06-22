@@ -5,10 +5,12 @@ AI Tutor API - Endpoints for intelligent tutoring features
 from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
+from pydantic import BaseModel
 
 from app.core.database import get_session
 from app.core.security import get_current_user
 from app.models.user import User
+from app.utils.ai_utils import ask_gpt, is_ai_available
 from app.schemas.ai_tutor import (
     TutorRequest, TutorResponse, HintRequest, HintResponse,
     CodeFeedbackRequest, CodeFeedbackResponse, LearningPathResponse,
@@ -21,18 +23,56 @@ router = APIRouter(prefix="/ai-tutor", tags=["ai-tutor"])
 ai_tutor_service = AITutorService()
 
 
+class SimpleAIRequest(BaseModel):
+    """Simple request for asking GPT a question"""
+    question: str
+    system_prompt: str = "You are a helpful assistant."
+
+
+class SimpleAIResponse(BaseModel):
+    """Simple response from GPT"""
+    response: str
+    ai_available: bool
+
+
+@router.post("/ask-simple", response_model=SimpleAIResponse)
+async def ask_simple_question(
+    request: SimpleAIRequest,
+    current_user: User = Depends(get_current_user)
+) -> SimpleAIResponse:
+    """
+    Simple endpoint to ask GPT a question directly using the ask_gpt utility
+    
+    This demonstrates the simple ask_gpt function usage pattern.
+    """
+    try:
+        response = ask_gpt(request.question, request.system_prompt)
+        
+        return SimpleAIResponse(
+            response=response,
+            ai_available=is_ai_available()
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting AI response: {str(e)}"
+        )
+
+
 @router.get("/status")
 async def get_ai_tutor_status():
     """Get AI tutor service status"""
     return {
         "ai_available": ai_tutor_service.is_available(),
-        "model": getattr(ai_tutor_service, 'model', 'none'),
+        "model": getattr(ai_tutor_service, 'model', 'gpt-4o-mini'),
         "features": {
             "personalized_responses": True,
             "contextual_hints": True,
             "code_feedback": True,
             "learning_paths": True,
-            "adaptive_questions": ai_tutor_service.is_available()
+            "adaptive_questions": ai_tutor_service.is_available(),
+            "simple_ask_gpt": is_ai_available()
         }
     }
 
